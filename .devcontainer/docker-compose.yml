@@ -1,0 +1,55 @@
+name: nuget-pipeline-dev
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount the repo so edits flow through instantly.
+      - ..:/workspaces/package-intelligence-pipeline:cached
+    command: sleep infinity
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/nuget_pipeline
+      DAGSTER_PG_HOST: db
+      DAGSTER_PG_PORT: "5432"
+      DAGSTER_PG_USER: postgres
+      DAGSTER_PG_PASSWORD: postgres
+      DAGSTER_PG_DB: dagster_storage
+      LOG_LEVEL: INFO
+      LOG_JSON: "false"
+      NUGET_MAX_PAGES: "2"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - devnet
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nuget_pipeline
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    ports:
+      # Host port is overridable. Default 5434 avoids clashing with a
+      # local Postgres on 5432 (or another service on 5433). Set
+      # POSTGRES_HOST_PORT in your shell (or docker context) to change.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nuget_pipeline"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - devnet
+
+volumes:
+  pgdata:
+
+networks:
+  devnet:

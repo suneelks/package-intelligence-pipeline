@@ -1,0 +1,3 @@
+load_from:
+  - python_module:
+      module_name: nuget_pipeline.dagster_defs.definitions

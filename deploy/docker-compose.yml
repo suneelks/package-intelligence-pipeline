@@ -1,0 +1,64 @@
+name: nuget-pipeline
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    command: ["python", "-m", "nuget_pipeline.db.migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  dagster-webserver:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/opt/dagster/dagster_home/workspace.yaml"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      # Bind the UI to DAGSTER_UI_BIND_IP (a specific private interface
+      # address) to keep it off the public internet. Defaults to loopback.
+      - "${DAGSTER_UI_BIND_IP:-127.0.0.1}:3000:3000"
+    restart: unless-stopped
+
+  dagster-daemon:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    command: ["dagster-daemon", "run", "-w", "/opt/dagster/dagster_home/workspace.yaml"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pgdata:

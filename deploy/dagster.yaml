@@ -1,0 +1,35 @@
+storage:
+  postgres:
+    postgres_db:
+      username:
+        env: DAGSTER_PG_USER
+      password:
+        env: DAGSTER_PG_PASSWORD
+      hostname:
+        env: DAGSTER_PG_HOST
+      db_name:
+        env: DAGSTER_PG_DB
+      port:
+        env: DAGSTER_PG_PORT
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 2
+
+run_launcher:
+  module: dagster.core.launcher
+  class: DefaultRunLauncher
+
+telemetry:
+  enabled: false
+
+retention:
+  schedule:
+    purge_after_days: 30
+  sensor:
+    purge_after_days:
+      skipped: 7
+      failure: 30
+      success: 7
