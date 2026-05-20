@@ -60,8 +60,18 @@ def test_disjunction_with_osi_term_is_open_source(spdx_dict, url_index) -> None:
 
 
 def test_conjunction_of_osi_terms_is_open_source(spdx_dict, url_index) -> None:
+    """`MIT AND Apache-2.0` — every term is OSI, so the conjunction is OSS."""
     result = classify("MIT AND Apache-2.0", None, spdx_dict, url_index)
     assert result.classification == "open_source"
+
+
+def test_conjunction_with_non_osi_term_is_proprietary(spdx_dict, url_index) -> None:
+    """`MIT AND CC-BY-NC-4.0` — AND binds the consumer to *both* licenses,
+    so one OSI-approved term cannot carry the verdict. The v1 any-OSI rule
+    classified this open_source; that was a bug."""
+    result = classify("MIT AND CC-BY-NC-4.0", None, spdx_dict, url_index)
+    assert result.classification == "proprietary"
+    assert "CC-BY-NC-4.0" in result.reasoning
 
 
 def test_recognized_but_non_osi_is_proprietary(spdx_dict, url_index) -> None:
@@ -105,6 +115,20 @@ def test_trailing_plus_is_stripped(spdx_dict, url_index) -> None:
 def test_parenthesised_expression(spdx_dict, url_index) -> None:
     result = classify(
         "(MIT OR Apache-2.0) AND BSD-3-Clause", None, spdx_dict, url_index
+    )
+    assert result.classification == "open_source"
+
+
+def test_mixed_expression_deferral_is_pinned(spdx_dict, url_index) -> None:
+    """Expressions mixing AND and OR lose their grouping in tokenization,
+    so they are *not* evaluated as boolean logic — they fall back to the
+    any-OSI rule. Under proper evaluation this example would be
+    proprietary (the AND side is non-OSI); until that lands, it
+    classifies open_source. This test pins the deferral: if it fails,
+    mixed-expression evaluation has changed — update the docs and this
+    test together."""
+    result = classify(
+        "(MIT OR Apache-2.0) AND CC-BY-NC-4.0", None, spdx_dict, url_index
     )
     assert result.classification == "open_source"
 

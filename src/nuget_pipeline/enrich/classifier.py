@@ -36,10 +36,12 @@ class Classification:
 
 # ─── SPDX expression parsing ────────────────────────────────────────────────
 
-# We don't implement the full SPDX expression grammar; v1 covers the 95%+
-# real-world shapes: simple ids, AND/OR conjunctions, parenthesised groups,
-# trailing `+` (any-later-version), and `WITH <exception>` clauses (we drop
-# the exception and classify on the base license).
+# We don't implement the full SPDX expression grammar; this covers the 95%+
+# real-world shapes: simple ids, uniform AND/OR conjunctions, trailing `+`
+# (any-later-version), and `WITH <exception>` clauses (we drop the exception
+# and classify on the base license). Expressions that mix AND and OR
+# (necessarily parenthesised) are not evaluated as boolean logic — they fall
+# back to the any-OSI rule. That deferral is pinned by a test.
 _TOKENIZER = re.compile(
     r"""
     \s*
@@ -54,23 +56,26 @@ _TOKENIZER = re.compile(
 )
 
 
-def _extract_license_terms(expression: str) -> list[str]:
-    """Return the set of base license ids referenced in a SPDX expression.
+def _extract_license_terms(expression: str) -> tuple[list[str], str | None]:
+    """Return (base license ids, combinator) for a SPDX expression.
 
-    Drops parens/AND/OR. For `WITH`, keeps the base id (left side) and drops
-    the exception (right side). Strips trailing `+`. Preserves source case
-    so callers can do an exact lookup against the SPDX list."""
+    The combinator is how the terms relate: "AND", "OR", None for a single
+    term, or "MIXED" when the expression uses both (grouping is lost, so a
+    mixed expression cannot be evaluated as boolean logic). For `WITH`,
+    keeps the base id (left side) and drops the exception (right side).
+    Strips trailing `+`. Preserves source case so callers can do an exact
+    lookup against the SPDX list."""
     if not expression:
-        return []
+        return [], None
 
     tokens: list[tuple[str, str]] = []
     pos = 0
     while pos < len(expression):
         m = _TOKENIZER.match(expression, pos)
         if not m:
-            return []  # malformed — caller treats as unknown
+            return [], None  # malformed — caller treats as unknown
         if m.end() == pos:
-            return []
+            return [], None
         pos = m.end()
         if m.group("paren"):
             tokens.append(("paren", m.group("paren")))
@@ -80,6 +85,7 @@ def _extract_license_terms(expression: str) -> list[str]:
             tokens.append(("id", m.group("id")))
 
     terms: list[str] = []
+    combinators: set[str] = set()
     skip_next = False
     for kind, value in tokens:
         if skip_next:
@@ -91,7 +97,16 @@ def _extract_license_terms(expression: str) -> list[str]:
         elif kind == "op" and value == "WITH":
             # Drop the next id (exception name)
             skip_next = True
-    return terms
+        elif kind == "op":
+            combinators.add(value)
+
+    if not combinators:
+        combinator = None
+    elif len(combinators) == 1:
+        combinator = next(iter(combinators))
+    else:
+        combinator = "MIXED"
+    return terms, combinator
 
 
 def _normalize_expression(expression: str) -> str:
@@ -167,7 +182,7 @@ def classify(
 
     if expr:
         normalized = _normalize_expression(expr)
-        terms = _extract_license_terms(expr)
+        terms, combinator = _extract_license_terms(expr)
         if not terms:
             return Classification(
                 "unknown", None, normalized, None,
@@ -189,9 +204,26 @@ def classify(
                 f"unrecognized SPDX license id: {unrecognized[0]}",
             )
 
-        # All terms recognized. Open-source if ANY term is OSI-approved
-        # (a disjunction lets the consumer pick any term; for `MIT AND
-        # Apache-2.0` both are OSI so the result is still OSS).
+        # All terms recognized. The combinator decides the rule:
+        #   AND   — the consumer is bound by every term, so every term
+        #           must be OSI-approved.
+        #   OR / single term — the consumer can pick any term, so one
+        #           OSI-approved term is enough.
+        #   MIXED — grouping was lost in tokenization, so the expression
+        #           can't be evaluated as boolean logic; fall back to the
+        #           any-OSI rule (pinned by a test as a known deferral).
+        if combinator == "AND":
+            non_osi = [t for t in terms if not spdx_dict[t].is_osi_approved]
+            if non_osi:
+                return Classification(
+                    "proprietary", non_osi[0], normalized, False,
+                    f"{non_osi[0]} in an AND conjunction is not OSI-approved",
+                )
+            return Classification(
+                "open_source", terms[0], normalized, True,
+                "every term in the AND conjunction is OSI-approved",
+            )
+
         osi_terms = [t for t in terms if spdx_dict[t].is_osi_approved]
         primary = osi_terms[0] if osi_terms else terms[0]
         if osi_terms:
